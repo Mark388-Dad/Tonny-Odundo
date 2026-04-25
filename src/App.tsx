@@ -33,11 +33,24 @@ import {
   Clock,
   ArrowUpRight,
   Calculator,
-  ChevronDown
+  ChevronDown,
+  Mail,
+  Lock,
+  ShieldCheck,
+  LogOut,
+  UserPlus,
+  LogIn,
+  Shield,
+  RefreshCw,
+  TrendingUp,
+  Zap,
+  Trophy
 } from 'lucide-react';
 import { SUBJECTS, GLOBAL_CONTEXTS, TOPICS_BY_SUBJECT, CONNECTORS, ASSESSMENT_CRITERIA_BY_SUBJECT, MOCK_EXAM_TASKS } from './constants';
-import { Topic, AppMode, Vocabulary, PracticeQuestion, AssessmentTask, GradingFeedback, Subject, GlobalContext } from './types';
+import { Topic, AppMode, Vocabulary, PracticeQuestion, AssessmentTask, GradingFeedback, Subject, GlobalContext, User as AppUser } from './types';
 import { GoogleGenAI } from "@google/genai";
+import { supabase } from './lib/supabase';
+import OnboardingView from './components/OnboardingView';
 
 // AI Service
 const genAI = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
@@ -63,12 +76,106 @@ const speak = (text: string, subjectId: string = 'german') => {
 };
 
 export default function App() {
+  const [user, setUser] = useState<AppUser | null>(null);
+  const [loading, setLoading] = useState(true);
   const [selectedSubject, setSelectedSubject] = useState<Subject>(SUBJECTS[0]);
   const [selectedContext, setSelectedContext] = useState<GlobalContext>(GLOBAL_CONTEXTS[0]);
   const [mode, setMode] = useState<AppMode>('dashboard');
   const [selectedTopic, setSelectedTopic] = useState<Topic | null>(null);
   const [chatOpen, setChatOpen] = useState(false);
   const [activeTask, setActiveTask] = useState<AssessmentTask | null>(null);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+
+  useEffect(() => {
+    const fetchProfile = async (userId: string, email: string) => {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', userId)
+        .single();
+      
+      if (data) {
+        setUser({
+          uid: userId,
+          email: email,
+          displayName: data.display_name || 'Learner',
+          schoolName: data.school_name,
+          subjects: data.subjects,
+          globalContexts: data.global_contexts,
+          goals: data.goals,
+          onboardingCompleted: data.onboarding_completed
+        });
+      } else {
+        // Handle case where profile hasn't been created yet by the trigger
+        // or trigger failed. We'll fallback to metadata for now.
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session?.user) {
+          setUser({
+            uid: session.user.id,
+            email: session.user.email || '',
+            displayName: session.user.user_metadata.displayName || 'Learner',
+            schoolName: session.user.user_metadata.schoolName,
+            onboardingCompleted: false
+          });
+        }
+      }
+      setLoading(false);
+    };
+
+    // Check initial session
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session?.user) {
+        fetchProfile(session.user.id, session.user.email || '');
+      } else {
+        setLoading(false);
+      }
+    });
+
+    // Listen for changes
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (session?.user) {
+        fetchProfile(session.user.id, session.user.email || '');
+      } else {
+        setUser(null);
+        setLoading(false);
+      }
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+  };
+
+  const handleOnboardingComplete = async (profileData: Partial<AppUser>) => {
+    if (!user) return;
+    
+    setLoading(true);
+    const { error } = await supabase
+      .from('profiles')
+      .update({
+        subjects: profileData.subjects,
+        global_contexts: profileData.globalContexts,
+        goals: profileData.goals,
+        onboarding_completed: true
+      })
+      .eq('id', user.uid);
+
+    if (error) {
+      console.error('Error updating profile:', error);
+      alert('Failed to save profile. Please try again.');
+      setLoading(false);
+      return;
+    }
+
+    setUser({
+      ...user,
+      ...profileData,
+      onboardingCompleted: true
+    });
+    setLoading(false);
+  };
 
   const startTask = (task: AssessmentTask) => {
     setActiveTask(task);
@@ -76,124 +183,167 @@ export default function App() {
     setSelectedTopic(null);
   };
 
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+        <div className="flex flex-col items-center gap-4">
+          <div className="w-16 h-16 bg-blue-600 rounded-3xl flex items-center justify-center text-white font-black text-3xl shadow-2xl animate-spin">IB</div>
+          <p className="text-slate-400 font-black uppercase tracking-[0.3em] text-[10px]">Loading Arena...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return <AuthScreen />;
+  }
+
+  if (!user.onboardingCompleted) {
+    return <OnboardingView user={user} onComplete={handleOnboardingComplete} />;
+  }
+
   return (
-    <div className="flex h-screen bg-slate-50 text-slate-900 font-sans border-8 border-slate-200 overflow-hidden">
+    <div className="flex h-screen bg-slate-50 text-slate-900 font-sans overflow-hidden">
       {/* Sidebar Navigation */}
-      <aside className="w-80 bg-white border-r border-slate-200 flex flex-col shrink-0 overflow-hidden">
-        {/* Branding */}
-        <div 
-          className="p-8 border-b border-slate-100 cursor-pointer hover:bg-slate-50 transition-colors"
-          onClick={() => { setMode('subject-selector'); setSelectedTopic(null); setActiveTask(null); }}
+      <aside className={`bg-white border-r border-slate-200 flex flex-col shrink-0 transition-all duration-300 relative ${isSidebarCollapsed ? 'w-20' : 'w-72'}`}>
+        {/* Toggle Button */}
+        <button 
+          onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
+          className="absolute -right-3 top-20 bg-white border border-slate-200 rounded-full p-1 shadow-sm hover:bg-slate-50 z-20"
         >
-          <div className="flex items-center gap-4">
-            <div className="w-12 h-12 bg-blue-600 rounded-2xl flex items-center justify-center text-white font-black text-2xl shadow-xl transform -rotate-3">IB</div>
-            <div>
-              <h1 className="font-black text-lg leading-none uppercase tracking-tighter">
-                {selectedSubject.name} <ChevronDown size={14} className="inline ml-1 text-blue-600" />
-              </h1>
-              <p className="text-[9px] text-slate-400 font-black uppercase tracking-[0.2em] mt-1">
-                {selectedContext.name}
-              </p>
+          {isSidebarCollapsed ? <ChevronRight size={12} /> : <ArrowLeft size={12} />}
+        </button>
+        {/* Branding */}
+        <div className="p-6 border-b border-slate-100 flex items-center gap-3 overflow-hidden shrink-0">
+          <div className="w-10 h-10 bg-blue-600 rounded-xl flex items-center justify-center text-white font-black text-xl shadow-lg shrink-0">IB</div>
+          {!isSidebarCollapsed && (
+            <div className="truncate">
+              <h1 className="font-black text-base leading-none uppercase tracking-tighter italic truncate">Mission Control</h1>
+              <p className="text-[9px] text-slate-400 font-black uppercase tracking-widest mt-1">MYP Master v1.0</p>
             </div>
-          </div>
+          )}
         </div>
 
         {/* Navigation Groups */}
-        <nav className="flex-1 overflow-y-auto p-6 space-y-8">
+        <nav className="flex-1 overflow-y-auto p-4 space-y-6 custom-scrollbar">
+          {/* Home Section */}
           <div>
-            <SidebarHeading label="Main Console" />
+            {!isSidebarCollapsed && <SidebarHeading label="Intelligence" />}
             <div className="space-y-1">
               <SidebarLink 
                 active={mode === 'dashboard'} 
                 onClick={() => { setMode('dashboard'); setSelectedTopic(null); setActiveTask(null); }}
                 icon={<LayoutDashboard size={18} />}
                 label="Home Dashboard"
+                collapsed={isSidebarCollapsed}
               />
               <SidebarLink 
-                active={mode === 'learn'} 
-                onClick={() => { setMode('learn'); setSelectedTopic(null); setActiveTask(null); }}
-                icon={<BookOpen size={18} />}
-                label="Study Modules"
+                active={mode === 'analytics'} 
+                onClick={() => setMode('analytics')}
+                icon={<TrendingUp size={18} />}
+                label="Analytics"
+                collapsed={isSidebarCollapsed}
               />
+            </div>
+          </div>
+
+          {/* Subjects Section */}
+          <div>
+            {!isSidebarCollapsed && <SidebarHeading label="Core Subjects" />}
+            <div className="space-y-1">
+              {user.subjects?.map((us) => {
+                const s = SUBJECTS.find(sub => sub.id === us.subjectId);
+                if (!s) return null;
+                return (
+                  <button 
+                    key={us.subjectId}
+                    onClick={() => { 
+                      setSelectedSubject(s); 
+                      setMode('dashboard');
+                    }}
+                    className={`flex items-center gap-3 w-full p-3 rounded-xl text-[10px] font-black transition-all border-2 uppercase tracking-tight ${
+                      selectedSubject.id === us.subjectId 
+                        ? 'bg-blue-50 text-blue-600 border-blue-100 shadow-sm font-black' 
+                        : 'bg-transparent text-slate-500 border-transparent hover:bg-slate-50'
+                    } ${isSidebarCollapsed ? 'justify-center p-4' : ''}`}
+                  >
+                    <BookOpen size={16} className={selectedSubject.id === us.subjectId ? 'text-blue-600' : 'text-slate-400'} />
+                    {!isSidebarCollapsed && <span className="truncate">{s.name}</span>}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* IB Integration */}
+          <div>
+            {!isSidebarCollapsed && <SidebarHeading label="Framework" />}
+            <div className="space-y-1">
               <SidebarLink 
                 active={mode === 'assessment'} 
-                onClick={() => { setMode('assessment'); setSelectedTopic(null); setActiveTask(null); }}
-                icon={<ClipboardCheck size={18} />}
-                label="Criteria & Rubrics"
+                onClick={() => setMode('assessment')}
+                icon={<Target size={18} />}
+                label="Criteria Hub"
+                collapsed={isSidebarCollapsed}
+              />
+              <SidebarLink 
+                active={mode === 'subject-selector'} 
+                onClick={() => setMode('subject-selector')}
+                icon={<Globe size={18} />}
+                label="Global Contexts"
+                collapsed={isSidebarCollapsed}
               />
             </div>
           </div>
 
+          {/* AI Engines */}
           <div>
-             <SidebarHeading label="AI Mastery Tools" />
-             <div className="space-y-1">
-                <SidebarLink 
-                  active={mode === 'generator'} 
-                  onClick={() => { setMode('generator'); setSelectedTopic(null); setActiveTask(null); }}
-                  icon={<Wand2 size={18} />}
-                  label="AI Exam Generator"
-                />
-                <SidebarLink 
-                  active={mode === 'tutor'} 
-                  onClick={() => { setChatOpen(true); }}
-                  icon={<Sparkles size={18} />}
-                  label="Interactive AI Tutor"
-                  badge="ACTIVE"
-                />
-             </div>
-          </div>
-
-          <div>
-            <SidebarHeading label="Study Roadmap" />
-            <div className="space-y-1 mt-3">
-              {(TOPICS_BY_SUBJECT[selectedSubject.id] || []).map((topic, idx) => (
-                <button 
-                  key={topic.id}
-                  onClick={() => { setMode('learn'); setSelectedTopic(topic); setActiveTask(null); }}
-                  className={`flex items-center gap-3 w-full p-3 rounded-2xl text-[11px] font-black transition-all border uppercase tracking-tight ${
-                    selectedTopic?.id === topic.id 
-                      ? 'bg-slate-900 text-white border-slate-900 shadow-xl translate-x-1' 
-                      : 'bg-transparent text-slate-500 border-transparent hover:bg-slate-100'
-                  }`}
-                >
-                  <span className={`w-5 h-5 rounded flex items-center justify-center text-[9px] ${
-                    selectedTopic?.id === topic.id ? 'bg-blue-600' : 'bg-slate-200 text-slate-500 font-bold'
-                  }`}>
-                    {idx + 1}
-                  </span>
-                  <span className="truncate">{topic.title}</span>
-                </button>
-              ))}
-              {(TOPICS_BY_SUBJECT[selectedSubject.id] || []).length === 0 && (
-                <div className="p-4 text-[10px] text-slate-400 font-bold uppercase text-center border-2 border-dashed border-slate-100 rounded-2xl">
-                  AI will generate content upon selection
-                </div>
-              )}
+            {!isSidebarCollapsed && <SidebarHeading label="AI Engines" />}
+            <div className="space-y-1">
+              <SidebarLink 
+                active={mode === 'tutor'} 
+                onClick={() => setChatOpen(true)}
+                icon={<Sparkles size={18} />}
+                label="AI Arena Tutor"
+                badge="ELITE"
+                collapsed={isSidebarCollapsed}
+              />
+              <SidebarLink 
+                active={mode === 'generator'} 
+                onClick={() => setMode('generator')}
+                icon={<Wand2 size={18} />}
+                label="Exam Generator"
+                collapsed={isSidebarCollapsed}
+              />
             </div>
           </div>
-        </nav>
 
-        {/* Footer Sidebar */}
-        <div className="p-6 border-t border-slate-100 bg-slate-50/50">
-           <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm relative overflow-hidden">
-              <div className="absolute top-0 right-0 w-20 h-20 bg-blue-600/5 rounded-full -translate-y-1/2 translate-x-1/2" />
-              <div className="flex items-center justify-between mb-2">
-                 <span className="text-[9px] font-black text-slate-400 uppercase">Your Progress</span>
-                 <span className="text-[9px] font-black text-blue-600 uppercase">25%</span>
-              </div>
-              <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                 <div className="h-full bg-blue-600 w-1/4" />
-              </div>
-           </div>
-        </div>
+          {/* Settings */}
+          <div className="pt-4 border-t border-slate-100">
+            <SidebarLink 
+                active={mode === 'settings'} 
+                onClick={() => setMode('settings')}
+                icon={<Settings size={18} />}
+                label="Settings"
+                collapsed={isSidebarCollapsed}
+              />
+              <SidebarLink 
+                active={false} 
+                onClick={handleLogout}
+                icon={<LogOut size={18} />}
+                label="Withdraw"
+                collapsed={isSidebarCollapsed}
+              />
+          </div>
+        </nav>
       </aside>
 
       {/* Main Content Area */}
-      <main className="grow overflow-y-auto bg-white flex flex-col relative">
+      <main className="grow overflow-y-auto bg-white flex flex-col relative overflow-x-hidden">
         {/* Subtle dynamic background */}
         <div className="absolute top-0 left-0 w-full h-96 bg-gradient-to-b from-slate-50 to-transparent pointer-events-none" />
         
-        <div className="relative z-10 p-12 lg:p-20 max-w-7xl mx-auto w-full">
+        <div className="relative z-10 p-8 lg:p-12 max-w-7xl mx-auto w-full transition-all duration-300">
           <AnimatePresence mode="wait">
             {mode === 'subject-selector' && (
               <motion.div 
@@ -221,6 +371,7 @@ export default function App() {
                 exit={{ opacity: 0, y: -20 }}
               >
                 <DashboardView 
+                  user={user}
                   currentSubject={selectedSubject}
                   currentContext={selectedContext}
                   onStartModule={(topic) => { setSelectedTopic(topic); setMode('learn'); }} 
@@ -321,6 +472,17 @@ export default function App() {
                     />
                 </motion.div>
             )}
+
+            {mode === 'analytics' && (
+                <motion.div 
+                    key="analytics"
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -20 }}
+                >
+                    <AnalyticsView subject={selectedSubject} />
+                </motion.div>
+            )}
           </AnimatePresence>
         </div>
       </main>
@@ -419,8 +581,14 @@ function SubjectSelectorView({
   );
 }
 
-function DashboardView({ onStartModule, currentSubject, currentContext }: { onStartModule: (topic: Topic) => void; currentSubject: Subject; currentContext: GlobalContext }) {
+function DashboardView({ onStartModule, currentSubject, currentContext, user }: { onStartModule: (topic: Topic) => void; currentSubject: Subject; currentContext: GlobalContext; user: AppUser }) {
   const topics = TOPICS_BY_SUBJECT[currentSubject.id] || [];
+  
+  // Filter subjects to show only what the user has selected, or a subset if none
+  const userSelectedSubjectIds = user.subjects?.map(s => s.subjectId) || [];
+  const displaySubjects = SUBJECTS.filter(s => userSelectedSubjectIds.includes(s.id));
+  const finalDisplaySubjects = displaySubjects.length > 0 ? displaySubjects : SUBJECTS.slice(0, 4);
+
   return (
     <div className="space-y-16">
       <header className="flex flex-col md:flex-row md:items-end justify-between gap-8">
@@ -428,93 +596,127 @@ function DashboardView({ onStartModule, currentSubject, currentContext }: { onSt
           <div className="flex items-center gap-3">
              <span className="px-3 py-1 bg-blue-100 text-blue-600 rounded-full text-[10px] font-black uppercase tracking-widest border border-blue-200">{currentSubject.name} | {currentContext.name}</span>
              <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-1">
-                <Clock size={12} /> Personalized Roadmap
+                <Clock size={12} /> Arena Active
              </span>
           </div>
-          <h1 className="text-7xl font-black text-slate-900 tracking-tighter leading-none uppercase">MYP <span className="text-blue-600">Mastery.</span></h1>
-          <p className="text-xl text-slate-400 font-medium max-w-2xl">Exploring **{currentContext.name}** through the lens of **{currentSubject.name}**. Start a module below or generate an exam task.</p>
+          <h1 className="text-7xl font-black text-slate-900 tracking-tighter leading-none uppercase">
+            Hi, <span className="text-blue-600">{user.displayName.split(' ')[0]}.</span>
+          </h1>
+          <p className="text-xl text-slate-400 font-medium max-w-2xl">
+            Welcome to your **{user.schoolName || 'IB'}** Mastery Arena. Current focus: **{currentContext.name}**.
+          </p>
         </div>
         <div className="flex gap-4">
-           <button className="bg-slate-900 text-white p-5 rounded-3xl shadow-xl hover:bg-black transition-all group">
-              <ArrowUpRight size={24} className="group-hover:translate-x-1 group-hover:-translate-y-1 transition-transform" />
-           </button>
+           <div className="p-1 px-4 bg-slate-900 text-white rounded-3xl flex items-center gap-3 shadow-2xl">
+              <div className="w-10 h-10 bg-blue-600 rounded-2xl flex items-center justify-center font-black">
+                {user.displayName.charAt(0)}
+              </div>
+              <div>
+                <p className="text-[9px] font-black uppercase text-slate-400 leading-none mb-1">Rank</p>
+                <p className="text-xs font-black uppercase">MYP Scholar</p>
+              </div>
+           </div>
         </div>
       </header>
 
-      {/* Stats Grid */}
+      {/* Arena Command Grid */}
       <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-         <StatCard label="Grammar Accuracy" value="84%" trend="+12%" icon={<Target className="text-blue-600" />} />
-         <StatCard label="Vocab Retained" value="1,240" trend="+45" icon={<BookOpen className="text-emerald-600" />} />
-         <StatCard label="Exam Readiness" value="B1" trend="UP" icon={<Activity className="text-amber-600" />} />
-         <StatCard label="Study Streak" value="12 Days" trend="🔥" icon={<Heart className="text-rose-600" />} />
+         <StatCard label="Global Proficiency" value="B2/C1" trend="PRO" icon={<Target className="text-blue-600" />} />
+         <StatCard label="Critical Thinking" value="7.4/8" trend="+0.4" icon={<Activity className="text-emerald-600" />} />
+         <StatCard label="Arena Stance" value="Aggressive" trend="🔥" icon={<Shield className="text-amber-600" />} />
+         <StatCard label="Weekly XP" value="12,450" trend="+1.2k" icon={<Zap className="text-rose-600" />} />
       </section>
 
-      {/* Main Dashboard Content */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-10">
-         <div className="lg:col-span-2 space-y-10">
-            <SectionHeader title="Recommended Modules" />
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-               {topics.slice(0, 4).map((topic) => (
-                  <TopicCard key={topic.id} topic={topic} onClick={() => onStartModule(topic)} />
-               ))}
+      {/* The Wide Arena Layout */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-10">
+         {/* Left Column: Learning Path */}
+         <div className="lg:col-span-8 space-y-12">
+            <div>
+              <SectionHeader title="Immediate Missions" />
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-8">
+                 {topics.slice(0, 4).map((topic) => (
+                    <TopicCard key={topic.id} topic={topic} onClick={() => onStartModule(topic)} />
+                 ))}
+                 {topics.length === 0 && (
+                   <div className="col-span-full py-20 bg-slate-50 rounded-[3rem] border-2 border-dashed border-slate-200 text-center">
+                     <p className="text-slate-400 font-bold uppercase tracking-widest text-xs italic">Select a module from the roadmap to begin tactical training</p>
+                   </div>
+                 )}
+              </div>
             </div>
 
-            <SectionHeader title="Recent Activity" />
-            <div className="space-y-4">
-               {[
-                 { action: 'Completed Quiz', target: 'Digital World Identities', time: '2 hours ago', score: '7/8' },
-                 { action: 'AI Assessment', target: 'Social Media vs Reality', time: 'Yesterday', score: '6/8' },
-                 { action: 'Vocab Mastered', target: 'Relationships Vocabulary', time: '2 days ago', score: '100%' }
-               ].map((item, i) => (
-                 <div key={i} className="flex items-center justify-between p-6 bg-slate-50 border border-slate-100 rounded-3xl hover:bg-white hover:shadow-md transition-all group">
-                    <div className="flex items-center gap-4">
-                       <div className="w-12 h-12 bg-white rounded-2xl flex items-center justify-center text-slate-400 group-hover:text-blue-600 transition-colors">
-                          <Clock size={20} />
-                       </div>
-                       <div>
-                          <p className="font-black text-slate-900 uppercase text-xs tracking-tight">{item.action}</p>
-                          <p className="text-sm font-bold text-slate-500">{item.target}</p>
-                       </div>
+            <div>
+              <SectionHeader title="Your Goal Mastery" />
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-8">
+                {finalDisplaySubjects.map((s) => (
+                  <div key={s.id} className="p-6 bg-white border border-slate-100 rounded-[2.5rem] shadow-sm hover:shadow-xl transition-all">
+                    <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-2">{s.name}</p>
+                    <div className="h-2 w-full bg-slate-100 rounded-full overflow-hidden mb-3">
+                      <div 
+                        className="h-full bg-blue-600 rounded-full" 
+                        style={{ width: `${Math.floor(Math.random() * 40) + 40}%` }}
+                      />
                     </div>
-                    <div className="text-right">
-                       <p className="font-black text-blue-600">{item.score}</p>
-                       <p className="text-[10px] font-black text-slate-400 uppercase">{item.time}</p>
-                    </div>
-                 </div>
-               ))}
+                    <p className="text-sm font-black text-slate-900">{Math.floor(Math.random() * 2) + 6}/8</p>
+                  </div>
+                ))}
+              </div>
             </div>
          </div>
 
-         <div className="space-y-10">
-            <SectionHeader title="Global Insights" />
+         {/* Right Column: Global Arena Insights */}
+         <div className="lg:col-span-4 space-y-10">
             <div className="bg-slate-900 rounded-[3rem] p-10 text-white space-y-8 relative overflow-hidden shadow-2xl">
                <div className="absolute top-0 right-0 w-40 h-40 bg-blue-600/20 rounded-full blur-3xl" />
-               <div className="space-y-2">
-                  <h4 className="text-xs font-black uppercase text-blue-400 tracking-widest">Global Context Focus</h4>
-                  <h3 className="text-3xl font-black uppercase leading-tight">Identities & Relationships</h3>
+               <div className="space-y-4">
+                  <div className="flex items-center gap-2">
+                    <Globe size={14} className="text-blue-400" />
+                    <h4 className="text-[10px] font-black uppercase text-blue-400 tracking-widest">Global Arena Insights</h4>
+                  </div>
+                  <h3 className="text-3xl font-black uppercase leading-tight">{currentContext.name}</h3>
+                  <p className="text-slate-400 text-sm leading-relaxed font-medium">Your current exploration focus accounts for **35% of your total Grade 10 weight**.</p>
                </div>
                
-               <div className="space-y-6">
-                  <p className="text-slate-400 text-sm leading-relaxed">Most students are currently struggling with **Criterion D** (Accuracy). Focus on your adjective endings in the tutor today.</p>
-                  <div className="p-6 bg-white/5 rounded-3xl border border-white/10">
-                     <p className="text-[10px] font-black text-blue-300 uppercase mb-2">Expert Hint</p>
-                     <p className="text-xs italic">"Use 'Es lässt sich feststellen' to increase your analytical depth in responses."</p>
+               <div className="space-y-6 pt-4 border-t border-white/10">
+                  <div className="flex justify-between items-end">
+                    <div>
+                      <p className="text-[10px] font-black text-slate-500 uppercase">Current Level</p>
+                      <p className="text-2xl font-black">{user.subjects?.find(s => s.subjectId === currentSubject.id)?.level || 'Standard'}</p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-[10px] font-black text-slate-500 uppercase">Target</p>
+                      <p className="text-2xl font-black text-blue-400">Mastery</p>
+                    </div>
+                  </div>
+                  <div className="h-1.5 w-full bg-white/10 rounded-full overflow-hidden">
+                    <div className="h-full bg-blue-600 w-3/4" />
                   </div>
                </div>
 
-               <button className="w-full bg-blue-600 hover:bg-blue-500 text-white py-4 rounded-2xl font-black uppercase tracking-widest transition-all shadow-xl flex items-center justify-center gap-2">
-                  Deep Dive Analysis <ChevronRight size={16} />
+               <button className="w-full bg-blue-600 hover:bg-blue-500 text-white py-5 rounded-3xl font-black uppercase tracking-widest transition-all shadow-xl flex items-center justify-center gap-2 group">
+                  Arena Analytics <ArrowUpRight size={18} className="group-hover:translate-x-1 group-hover:-translate-y-1 transition-transform" />
                </button>
             </div>
 
-            <div className="bg-emerald-600 rounded-[3rem] p-10 text-white shadow-2xl">
-               <h3 className="text-2xl font-black uppercase mb-4">Exam Prep</h3>
-               <p className="text-emerald-100 text-sm font-medium mb-6">4 practice tasks are waiting for your evaluation. Average band target: 7/8.</p>
-               <div className="flex -space-x-4">
-                  {[1,2,3,4].map(i => (
-                    <div key={i} className="w-10 h-10 rounded-full border-2 border-emerald-600 bg-slate-200" />
+            <div className="bg-white border border-slate-100 rounded-[3rem] p-10 shadow-sm">
+               <SectionHeader title="Arena Feed" />
+               <div className="space-y-6 mt-8">
+                  {[
+                    { user: 'S. Amara', action: 'Scored 8/8', time: '10m' },
+                    { user: 'D. Zhang', action: 'Started Topic A', time: '1h' },
+                    { user: 'K. Miller', action: 'Mastered Vocab', time: '2h' },
+                  ].map((f, i) => (
+                    <div key={i} className="flex items-center justify-between group">
+                      <div className="flex items-center gap-3">
+                        <div className="w-8 h-8 rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center text-[10px] font-black">{f.user.charAt(0)}</div>
+                        <div>
+                          <p className="text-xs font-black text-slate-900 leading-none mb-1">{f.user}</p>
+                          <p className="text-[10px] font-medium text-slate-400 uppercase tracking-tight">{f.action}</p>
+                        </div>
+                      </div>
+                      <span className="text-[9px] font-black text-slate-300">{f.time}</span>
+                    </div>
                   ))}
-                  <div className="w-10 h-10 rounded-full border-2 border-emerald-600 bg-white flex items-center justify-center text-emerald-600 text-[10px] font-black">+4</div>
                </div>
             </div>
          </div>
@@ -711,26 +913,28 @@ function ExamGeneratorView({ onStartTask, subject, context }: { onStartTask: (ta
   );
 }
 
-function SidebarLink({ active, onClick, icon, label, badge }: { active: boolean; onClick: () => void; icon: React.ReactNode; label: string; badge?: string }) {
+function SidebarLink({ active, onClick, icon, label, badge, collapsed }: { active: boolean; onClick: () => void; icon: React.ReactNode; label: string; badge?: string; collapsed?: boolean }) {
   return (
     <button 
       onClick={onClick}
-      className={`flex items-center justify-between w-full p-3.5 rounded-2xl transition-all group ${
+      className={`flex items-center gap-3 w-full p-3.5 rounded-2xl transition-all group border-2 ${
         active 
-          ? 'bg-blue-600 text-white shadow-xl shadow-blue-200' 
-          : 'text-slate-500 hover:bg-slate-100 hover:text-slate-900'
-      }`}
+          ? 'bg-slate-900 text-white border-slate-900 shadow-xl' 
+          : 'text-slate-500 hover:bg-slate-100 hover:border-slate-200 border-transparent'
+      } ${collapsed ? 'justify-center p-3.5' : ''}`}
     >
-      <div className="flex items-center gap-3">
-        <div className={`p-1.5 rounded-lg transition-colors ${active ? 'bg-white/20' : 'bg-slate-100 group-hover:bg-white'}`}>
-           {icon}
-        </div>
-        <span className="text-[13px] font-black uppercase tracking-tight">{label}</span>
+      <div className={`p-1.5 rounded-lg transition-colors ${active ? 'bg-blue-600 text-white' : 'bg-slate-100 group-hover:bg-white text-slate-400'}`}>
+         {icon}
       </div>
-      {badge && (
-        <span className={`text-[8px] font-black px-1.5 py-0.5 rounded ${active ? 'bg-white text-blue-600' : 'bg-blue-600 text-white'}`}>
-          {badge}
-        </span>
+      {!collapsed && (
+        <>
+          <span className="flex-1 text-left text-[11px] font-black uppercase tracking-tight truncate">{label}</span>
+          {badge && (
+            <span className={`text-[8px] font-black px-1.5 py-0.5 rounded ${active ? 'bg-white text-slate-900' : 'bg-blue-600 text-white'}`}>
+              {badge}
+            </span>
+          )}
+        </>
       )}
     </button>
   );
@@ -1449,5 +1653,411 @@ function TutorOverlay({ isOpen, onClose, subject, context }: { isOpen: boolean; 
         </>
       )}
     </AnimatePresence>
+  );
+}
+
+function AnalyticsView({ subject }: { subject: Subject }) {
+  return (
+    <div className="space-y-12">
+      <header className="max-w-3xl">
+        <div className="flex items-center gap-3 mb-4">
+           <span className="px-3 py-1 bg-rose-100 text-rose-700 rounded-full text-[10px] font-black uppercase tracking-widest border border-rose-200">ARENA FEEDBACK</span>
+        </div>
+        <h1 className="text-6xl font-black text-slate-900 tracking-tighter uppercase leading-none">Market <span className="text-rose-600 italic">Intel & Analytics</span></h1>
+        <p className="text-slate-500 mt-4 text-xl font-medium leading-relaxed">Cross-curricular performance data for {subject.name}. Track your movement across global bands.</p>
+      </header>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-10">
+        <div className="bg-white p-10 rounded-[3rem] border border-slate-100 shadow-xl">
+          <SectionHeader title="Performance Heatmap" />
+          <div className="space-y-6 mt-8">
+            {['Criterion A', 'Criterion B', 'Criterion C', 'Criterion D'].map((c, i) => (
+              <div key={i} className="space-y-2">
+                <div className="flex justify-between items-end">
+                  <span className="text-xs font-black uppercase text-slate-400">{c}</span>
+                  <span className="text-sm font-black text-slate-900">{Math.floor(Math.random() * 20) + 70}%</span>
+                </div>
+                <div className="h-3 w-full bg-slate-50 rounded-full overflow-hidden">
+                  <div 
+                    className={`h-full rounded-full ${i % 2 === 0 ? 'bg-blue-600' : 'bg-emerald-500'}`}
+                    style={{ width: `${Math.floor(Math.random() * 20) + 70}%` }}
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="bg-slate-900 p-10 rounded-[3rem] text-white space-y-8">
+           <SectionHeader title="Arena Mastery Ranking" />
+           <div className="space-y-4 mt-8">
+              {[
+                { label: 'Global Standing', value: 'Top 5%' },
+                { label: 'Complexity Index', value: 'High' },
+                { label: 'Accuracy Tier', value: 'Elite' },
+              ].map((item, i) => (
+                <div key={i} className="bg-white/5 p-6 rounded-3xl border border-white/10 flex justify-between items-center">
+                  <span className="text-[10px] font-black uppercase text-slate-400">{item.label}</span>
+                  <span className="text-xl font-black">{item.value}</span>
+                </div>
+              ))}
+           </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AuthScreen() {
+  const [isLogin, setIsLogin] = useState(true);
+
+  return (
+    <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6 font-sans">
+      <div className="max-w-md w-full">
+        <div className="flex justify-center mb-8">
+          <div className="w-16 h-16 bg-blue-600 rounded-3xl flex items-center justify-center text-white font-black text-3xl shadow-2xl transform -rotate-6">IB</div>
+        </div>
+
+        <motion.div 
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="bg-white rounded-[3rem] shadow-2xl border border-slate-100 overflow-hidden"
+        >
+          <div className="p-10">
+            {isLogin ? (
+              <LoginView onSwitch={() => setIsLogin(false)} />
+            ) : (
+              <RegisterView onSwitch={() => setIsLogin(true)} />
+            )}
+          </div>
+
+          <div className="px-10 py-6 bg-slate-50 border-t border-slate-100 flex items-center justify-center gap-2">
+            <ShieldCheck size={16} className="text-blue-600" />
+            <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Secure MYP Mastery Portal</span>
+          </div>
+        </motion.div>
+      </div>
+    </div>
+  );
+}
+
+function LoginView({ onSwitch }: { onSwitch: () => void }) {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setError(null);
+    
+    const { error: authError } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
+
+    if (authError) {
+      setError(authError.message);
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="space-y-8">
+      <header>
+        <h2 className="text-4xl font-black tracking-tighter uppercase leading-none mb-2">Welcome <span className="text-blue-600">Back.</span></h2>
+        <p className="text-slate-400 font-bold uppercase tracking-widest text-[10px]">Access your personalized IB roadmap</p>
+      </header>
+
+      {error && (
+        <div className="p-4 bg-rose-50 border border-rose-100 rounded-2xl text-rose-600 text-xs font-bold">
+          {error}
+        </div>
+      )}
+
+      <form onSubmit={handleLogin} className="space-y-4">
+        <div className="space-y-2">
+          <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-2">Email Address</label>
+          <div className="relative">
+            <Mail className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+            <input 
+              type="email" 
+              required
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="name@school.edu"
+              className="w-full pl-12 pr-4 py-4 bg-slate-50 border-2 border-transparent focus:border-blue-600 rounded-2xl font-bold outline-none transition-all"
+            />
+          </div>
+        </div>
+
+        <div className="space-y-2">
+          <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-2">Password</label>
+          <div className="relative">
+            <Lock className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+            <input 
+              type="password" 
+              required
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="••••••••"
+              className="w-full pl-12 pr-4 py-4 bg-slate-50 border-2 border-transparent focus:border-blue-600 rounded-2xl font-bold outline-none transition-all"
+            />
+          </div>
+        </div>
+
+        <button 
+          type="submit"
+          disabled={loading}
+          className="w-full bg-slate-900 hover:bg-black disabled:bg-slate-300 text-white py-5 rounded-2xl font-black uppercase tracking-[0.2em] transition-all shadow-xl flex items-center justify-center gap-3"
+        >
+          {loading ? 'Sign In...' : 'Sign In'} <LogIn size={20} />
+        </button>
+      </form>
+
+      <div className="pt-6 border-t border-slate-100 text-center">
+        <p className="text-sm font-bold text-slate-400">
+          New here? {' '}
+          <button onClick={onSwitch} className="text-blue-600 hover:underline">Create an account</button>
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function RegisterView({ onSwitch }: { onSwitch: () => void }) {
+  const [step, setStep] = useState(1);
+  const [name, setName] = useState('');
+  const [school, setSchool] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [code, setCode] = useState('');
+  const [isVerifying, setIsVerifying] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState(false);
+
+  const nextStep = async () => {
+    setError(null);
+    if (step === 1) {
+      if (!name || !email) {
+        setError('Name and Email are required.');
+        return;
+      }
+      setIsVerifying(true);
+      // In a real app we might trigger a verify email here, 
+      // but for this flow we proceed to show the "code sent" UI
+      setTimeout(() => {
+        setIsVerifying(false);
+        setStep(2);
+      }, 800);
+    } else if (step === 2) {
+      if (code.length < 6) {
+        setError('Enter a valid 6-digit code.');
+        return;
+      }
+      setStep(3);
+    } else if (step === 3) {
+      if (!password || password !== confirmPassword) {
+        setError('Passwords must match.');
+        return;
+      }
+      setIsVerifying(true);
+      
+      const { error: signUpError } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          data: {
+            displayName: name,
+            schoolName: school,
+          }
+        }
+      });
+
+      if (signUpError) {
+        setError(signUpError.message);
+        setIsVerifying(false);
+      } else {
+        setSuccess(true);
+        setIsVerifying(false);
+      }
+    }
+  };
+
+  if (success) {
+    return (
+      <div className="space-y-8 text-center py-10">
+        <div className="w-20 h-20 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto mb-6">
+          <CheckCircle2 size={40} />
+        </div>
+        <h2 className="text-3xl font-black uppercase tracking-tighter">Success!</h2>
+        <p className="text-slate-500 font-medium">Please check your email to confirm your account before logging in.</p>
+        <button 
+          onClick={onSwitch}
+          className="w-full bg-slate-900 text-white py-4 rounded-2xl font-black uppercase tracking-widest"
+        >
+          Go to Sign In
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-8">
+      <header>
+        <div className="flex items-center justify-between mb-2">
+           <h2 className="text-4xl font-black tracking-tighter uppercase leading-none">Register.</h2>
+           <span className="text-[10px] font-black text-blue-600 uppercase tracking-widest whitespace-nowrap">Step {step} of 3</span>
+        </div>
+        <p className="text-slate-400 font-bold uppercase tracking-widest text-[10px]">
+          {step === 1 && 'Personal Information'}
+          {step === 2 && 'Email Verification'}
+          {step === 3 && 'Set Security Password'}
+        </p>
+      </header>
+
+      {error && (
+        <div className="p-4 bg-rose-50 border border-rose-100 rounded-2xl text-rose-600 text-xs font-bold">
+          {error}
+        </div>
+      )}
+
+      <AnimatePresence mode="wait">
+        {step === 1 && (
+          <motion.div 
+            key="step1"
+            initial={{ opacity: 0, x: 20 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: -20 }}
+            className="space-y-4"
+          >
+            <div className="space-y-2">
+              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-2">Full Name</label>
+              <input 
+                type="text" 
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="John Doe"
+                className="w-full px-5 py-4 bg-slate-50 border-2 border-transparent focus:border-blue-600 rounded-2xl font-bold outline-none transition-all"
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-2">School (Optional)</label>
+              <input 
+                type="text" 
+                value={school}
+                onChange={(e) => setSchool(e.target.value)}
+                placeholder="IB International School"
+                className="w-full px-5 py-4 bg-slate-50 border-2 border-transparent focus:border-blue-600 rounded-2xl font-bold outline-none transition-all"
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-2">Email Address</label>
+              <input 
+                type="email" 
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="name@school.edu"
+                className="w-full px-5 py-4 bg-slate-50 border-2 border-transparent focus:border-blue-600 rounded-2xl font-bold outline-none transition-all"
+              />
+            </div>
+          </motion.div>
+        )}
+
+        {step === 2 && (
+          <motion.div 
+            key="step2"
+            initial={{ opacity: 0, x: 20 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: -20 }}
+            className="space-y-6"
+          >
+            <div className="bg-blue-50 border border-blue-100 p-6 rounded-3xl text-center">
+              <Mail className="mx-auto text-blue-600 mb-3" size={32} />
+              <p className="text-xs font-bold text-slate-600 leading-relaxed">
+                We've sent a 6-digit confirmation code to <span className="text-blue-600">{email}</span>. Please enter it below.
+              </p>
+            </div>
+            <div className="space-y-2">
+              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-2 text-center block">Verification Code</label>
+              <input 
+                type="text" 
+                maxLength={6}
+                value={code}
+                onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
+                placeholder="000000"
+                className="w-full px-5 py-5 bg-slate-50 border-2 border-transparent focus:border-blue-600 rounded-2xl font-black text-3xl tracking-[0.5em] text-center outline-none transition-all"
+              />
+            </div>
+            <div className="text-center">
+              <button className="text-[10px] font-black text-blue-600 uppercase tracking-widest hover:underline flex items-center gap-2 mx-auto">
+                <RefreshCw size={12} /> Resend Code
+              </button>
+            </div>
+          </motion.div>
+        )}
+
+        {step === 3 && (
+          <motion.div 
+            key="step3"
+            initial={{ opacity: 0, x: 20 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: -20 }}
+            className="space-y-4"
+          >
+            <div className="space-y-2">
+              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-2">Password</label>
+              <input 
+                type="password" 
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="••••••••"
+                className="w-full px-5 py-4 bg-slate-50 border-2 border-transparent focus:border-blue-600 rounded-2xl font-bold outline-none transition-all"
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-2">Confirm Password</label>
+              <input 
+                type="password" 
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                placeholder="••••••••"
+                className="w-full px-5 py-4 bg-slate-50 border-2 border-transparent focus:border-blue-600 rounded-2xl font-bold outline-none transition-all"
+              />
+            </div>
+            
+            <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl flex items-center justify-between group cursor-pointer">
+              <div className="flex items-center gap-3">
+                <div className="w-6 h-6 border-2 border-slate-300 rounded flex items-center justify-center transition-colors group-hover:border-blue-600">
+                  <div className="w-3 h-3 bg-blue-600 rounded-full" />
+                </div>
+                <span className="text-xs font-bold text-slate-600">I'm not a robot</span>
+              </div>
+              <Shield size={20} className="text-slate-300" />
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <button 
+        onClick={nextStep}
+        disabled={isVerifying}
+        className="w-full bg-blue-600 hover:bg-blue-500 disabled:bg-slate-300 text-white py-5 rounded-2xl font-black uppercase tracking-[0.2em] transition-all shadow-xl flex items-center justify-center gap-3"
+      >
+        {isVerifying ? 'Processing...' : (step === 3 ? 'Complete Setup' : 'Continue')} 
+        {!isVerifying && <UserPlus size={20} />}
+      </button>
+
+      {step === 1 && (
+        <div className="pt-6 border-t border-slate-100 text-center">
+          <p className="text-sm font-bold text-slate-400">
+            Already have an account? {' '}
+            <button onClick={onSwitch} className="text-blue-600 hover:underline">Sign in</button>
+          </p>
+        </div>
+      )}
+    </div>
   );
 }

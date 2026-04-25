@@ -93,4 +93,20 @@ export interface GlobalContext {
   explorations: string[];
 }
 
-export type AppMode = 'dashboard' | 'learn' | 'tutor' | 'exam-prep' | 'assessment' | 'generator' | 'analytics' | 'settings' | 'subject-selector';
+export interface UserSubject {
+  subjectId: SubjectId;
+  level: string;
+}
+
+export interface User {
+  uid: string;
+  email: string;
+  displayName: string;
+  schoolName?: string;
+  subjects?: UserSubject[];
+  globalContexts?: GlobalContextId[];
+  goals?: string[];
+  onboardingCompleted?: boolean;
+}
+
+export type AppMode = 'dashboard' | 'learn' | 'tutor' | 'exam-prep' | 'assessment' | 'generator' | 'analytics' | 'settings' | 'subject-selector' | 'auth';
