@@ -1,20 +1,29 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# IB MYP Master Arena
 
-# Run and deploy your AI Studio app
+Adaptive AI-powered learning platform for IB MYP students.
 
-This contains everything you need to run your app locally.
+## Deployment Instructions
 
-View your app in AI Studio: https://ai.studio/apps/13517c90-67d2-46e9-b8d0-d8637e84de6c
+### 1. Netlify (Recommended)
+This project is ready for Netlify out of the box.
+1. Connect your GitHub repository to Netlify.
+2. In the Netlify dashboard, go to **Site settings > Build & deploy > Environment variables**.
+3. Add the following variables:
+   - `VITE_SUPABASE_URL`: (Copy from `.env.example`)
+   - `VITE_SUPABASE_ANON_KEY`: (Copy from `.env.example`)
+   - `VITE_GEMINI_API_KEY`: Your Google Gemini API Key.
+4. Set the **Build command** to `npm run build`.
+5. Set the **Publish directory** to `dist`.
 
-## Run Locally
+### 2. GitHub Pages
+1. Install the `gh-pages` package: `npm install gh-pages --save-dev`.
+2. Add `"homepage": "https://username.github.io/repo-name"` to `package.json`.
+3. Add deploy scripts to `package.json`:
+   ```json
+   "predeploy": "npm run build",
+   "deploy": "gh-pages -d dist"
+   ```
+4. If your site is not at the root domain, you may need to adjust `base` in `vite.config.ts`.
 
-**Prerequisites:**  Node.js
-
-
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+## Environment Variables
+See `.env.example` for the required variables to connect to Supabase and Gemini AI.

@@ -53,7 +53,8 @@ import { supabase } from './lib/supabase';
 import OnboardingView from './components/OnboardingView';
 
 // AI Service
-const genAI = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
+const geminiKey = import.meta.env.VITE_GEMINI_API_KEY || (typeof process !== 'undefined' ? process.env.GEMINI_API_KEY : '');
+const genAI = new GoogleGenAI({ apiKey: geminiKey || "" });
 
 const getLangCode = (subjectId: string) => {
   switch (subjectId) {
